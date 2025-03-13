@@ -58,10 +58,10 @@ def calculate_cis_permutations(genotypes_t, phenotype_t, permutation_ix_t,
     if corr_t.shape[0] == 0:
         raise ValueError('All correlations resulted in NaN. Please check phenotype values.')
     
-    r2_perm_t,_ = corr_t.max(0)  # For each permutation, find the correlation of the one variant that has the highest value and keep it. There should be 10K of these.
+    r2_perm_t,_ = corr_t.max(0)  # maximum correlation across all genotypes and permutations
     
     # Change 1 - keep all correlations per genotype
-    r2_perm_t_all = corr_t # The full variant space. There should be n_variants * 10k of these.
+    r2_perm_t_all = corr_t
     # Change 1
 
     r2_nominal_t = r_nominal_t.pow(2)
@@ -566,8 +566,8 @@ def map_nominal(genotype_df, variant_df, phenotype_df, phenotype_pos_df, prefix,
 def prepare_cis_output(r_nominal, r2_perm, r2_perm_max, std_ratio, g, num_var, dof, variant_id, start_distance, end_distance, phenotype_id, nperm=10000):
     """Return nominal p-value, allele frequencies, etc. as pd.Series"""
     r2_nominal = r_nominal*r_nominal
-    pval_perm = (np.sum(r2_perm >= r2_nominal)+1) / (nperm+1) # the permutated correlations of the variant of interest (10K of these)
-    pval_perm_max = (np.sum(r2_perm_max >= r2_nominal)+1) / (nperm+1) # the maximum correlations of all the cis-variants (10K of these)
+    pval_perm = (np.sum(r2_perm >= r2_nominal)+1) / (nperm+1)
+    pval_perm_max = (np.sum(r2_perm_max >= r2_nominal)+1) / (nperm+1)
 
     slope = r_nominal * std_ratio
     tstat2 = dof * r2_nominal / (1 - r2_nominal)
@@ -724,7 +724,7 @@ def map_cis(genotype_df, variant_df, phenotype_df, phenotype_pos_df, covariates_
                                                           dtype=torch.float32).to(device))
                 idof = dof - 1
 
-# Change 3 - res is now a list of SNPs for a single gene rather than a single gene-SNP pair and saves this into a single file per gene
+# Change 3 - res is now a list of SNPs for a single gene rather than a single gene-SNP pair and beta is gutted since it can fail to converge
             res = calculate_cis_permutations(genotypes_t, phenotype_t, permutation_ix_t,
                                              residualizer=iresidualizer, random_tiebreak=random_tiebreak) # changed
             r_nominal, std_ratio, var_ix, r2_perm, r2_perm_t_all, g = [i.cpu().numpy() for i in res]
@@ -738,10 +738,9 @@ def map_cis(genotype_df, variant_df, phenotype_df, phenotype_pos_df, covariates_
                     res_s[['pval_beta', 'beta_shape1', 'beta_shape2', 'true_df', 'pval_true_df']] = calculate_beta_approx_pval(r2_perm_t_all[snp_index].flatten(), r_nominal[snp_index]*r_nominal[snp_index], idof)
                     res_s[['pval_beta_max', 'beta_shape1_max', 'beta_shape2_max', 'true_df_max', 'pval_true_df_max']] = calculate_beta_approx_pval(r2_perm, r_nominal[snp_index]*r_nominal[snp_index], idof)
                 res_df.append(res_s)
+# Change 3 - res is now a list of SNPs for a single gene rather than a single gene-SNP pair
 
-# Change 3 - res is now a list of SNPs for a single gene rather than a single gene-SNP pair and saves this into a single file per gene
-
-    else:  # grouped mode - to do with calibrating statistical tests
+    else:  # grouped mode
         for k, (phenotypes, genotypes, genotype_range, phenotype_ids, group_id) in enumerate(igc.generate_data(verbose=verbose), 1):
             # copy genotypes to GPU
             genotypes_t = torch.tensor(genotypes, dtype=torch.float).to(device)
@@ -787,11 +786,13 @@ def map_cis(genotype_df, variant_df, phenotype_df, phenotype_pos_df, covariates_
                                                 igc.phenotype_end[phenotype_ids[0]], idof,
                                                 group_id, nperm=nperm, beta_approx=beta_approx)
             res_df.append(res_s)
+
     res_df = pd.concat(res_df, axis=1, sort=False).T
     res_df.index.name = 'phenotype_id'
     logger.write(f'  Time elapsed: {(time.time()-start_time)/60:.2f} min')
     logger.write('done.')
     return res_df.astype(output_dtype_dict).infer_objects()
+
 
 def map_independent(genotype_df, variant_df, cis_df, phenotype_df, phenotype_pos_df, covariates_df,
                     group_s=None, maf_threshold=0, fdr=0.05, fdr_col='qval', nperm=10000, window=1000000,

@@ -9,7 +9,6 @@ import re
 import pickle
 import argparse
 from collections import defaultdict
-import importlib.metadata
 
 sys.path.insert(1, os.path.dirname(__file__))
 from core import *
@@ -24,15 +23,14 @@ def main():
     parser.add_argument('prefix', help='Prefix for output file names')
     parser.add_argument('--mode', type=str, default='cis', choices=['cis', 'cis_nominal', 'cis_independent', 'cis_susie', 'trans', 'trans_susie'],
                         help='Mapping mode. Default: cis')
-    parser.add_argument('--covariates', default=None, help='Covariates file, tab-delimited (covariates x samples)')
-    parser.add_argument('--paired_covariate', default=None, help='Single phenotype-specific covariate, tab-delimited (phenotypes x samples)')
+    parser.add_argument('--covariates', default=None, help='Covariates file, tab-delimited, covariates x samples')
+    parser.add_argument('--paired_covariate', default=None, help='Single phenotype-specific covariate. Tab-delimited file, phenotypes x samples')
     parser.add_argument('--permutations', type=int, default=10000, help='Number of permutations. Default: 10000')
-    parser.add_argument('--interaction', default=None, type=str, help='Tab-delimited file mapping sample ID to interaction value(s) (if multiple interaction terms are used, the file must include a header with variable names)')
+    parser.add_argument('--interaction', default=None, type=str, help='Interaction term(s)')
     parser.add_argument('--cis_output', default=None, type=str, help="Output from 'cis' mode with q-values. Required for independent cis-QTL mapping.")
     parser.add_argument('--phenotype_groups', default=None, type=str, help='Phenotype groups. Header-less TSV with two columns: phenotype_id, group_id')
     parser.add_argument('--window', default=1000000, type=np.int32, help='Cis-window size, in bases. Default: 1000000.')
-    parser.add_argument('--pval_threshold', default=1e-5, type=np.float64, help='Output only significant phenotype-variant pairs with a p-value below threshold. Default: 1e-5 for trans-QTL')
-    parser.add_argument('--logp', action='store_true', help='Compute nominal p-values as -log10(P) for added precision (requires R)')
+    parser.add_argument('--pval_threshold', default=None, type=np.float64, help='Output only significant phenotype-variant pairs with a p-value below threshold. Default: 1e-5 for trans-QTL')
     parser.add_argument('--maf_threshold', default=0, type=np.float64, help='Include only genotypes with minor allele frequency >= maf_threshold. Default: 0')
     parser.add_argument('--maf_threshold_interaction', default=0.05, type=np.float64, help='MAF threshold for interactions, applied to lower and upper half of samples')
     parser.add_argument('--dosages', action='store_true', help='Load dosages instead of genotypes (only applies to PLINK2 bgen input).')
@@ -59,7 +57,7 @@ def main():
         raise ValueError("Interactions are only supported in 'cis_nominal' or 'trans' mode.")
 
     logger = SimpleLogger(os.path.join(args.output_dir, f'{args.prefix}.tensorQTL.{args.mode}.log'))
-    logger.write(f'[{datetime.now().strftime("%b %d %H:%M:%S")}] Running TensorQTL v{importlib.metadata.version("tensorqtl")}: {args.mode.split("_")[0]}-QTL mapping')
+    logger.write(f'[{datetime.now().strftime("%b %d %H:%M:%S")}] Running TensorQTL: {args.mode.split("_")[0]}-QTL mapping')
     if torch.cuda.is_available():
         logger.write(f'  * using GPU ({torch.cuda.get_device_name(torch.cuda.current_device())})')
     else:
@@ -128,7 +126,7 @@ def main():
         maf_threshold = args.maf_threshold
 
     if args.phenotype_groups is not None:
-        group_s = pd.read_csv(args.phenotype_groups, sep='\t', index_col=0, header=None).squeeze('columns').rename(None)
+        group_s = pd.read_csv(args.phenotype_groups, sep='\t', index_col=0, header=None).squeeze('columns')
         # verify sort order
         group_dict = group_s.to_dict()
         previous_group = ''
@@ -170,8 +168,8 @@ def main():
                                           warn_monomorphic=args.warn_monomorphic, logger=logger, seed=args.seed, verbose=True))
             res_df = pd.concat(res_df)
         logger.write('  * writing output')
-        if has_rpy2:
-            calculate_qvalues(res_df, fdr=args.fdr, qvalue_lambda=args.qvalue_lambda, logger=logger)
+        #if has_rpy2:
+        #    calculate_qvalues(res_df, fdr=args.fdr, qvalue_lambda=args.qvalue_lambda, logger=logger)
         out_file = os.path.join(args.output_dir, f'{args.prefix}.cis_qtl.txt.gz')
         res_df.to_csv(out_file, sep='\t', float_format='%.6g')
 
@@ -230,14 +228,14 @@ def main():
         summary_df = pd.read_csv(args.cis_output, sep='\t', index_col=0)
         summary_df.rename(columns={'minor_allele_samples':'ma_samples', 'minor_allele_count':'ma_count'}, inplace=True)
         if args.chunk_size is None:
-            res_df = cis.map_independent(genotype_df, variant_df, summary_df, phenotype_df, phenotype_pos_df, covariates_df=covariates_df,
+            res_df = cis.map_independent(genotype_df, variant_df, summary_df, phenotype_df, phenotype_pos_df, covariates_df,
                                          group_s=group_s, fdr=args.fdr, nperm=args.permutations, window=args.window,
                                          maf_threshold=maf_threshold, logger=logger, seed=args.seed, verbose=True)
         else:
             res_df = []
             for gt_df, var_df, p_df, p_pos_df, _ in genotypeio.generate_paired_chunks(pgr, phenotype_df, phenotype_pos_df, args.chunk_size,
                                                                                       dosages=args.dosages, verbose=True):
-                res_df.append(cis.map_independent(gt_df, var_df, summary_df, p_df, p_pos_df, covariates_df=covariates_df,
+                res_df.append(cis.map_independent(gt_df, var_df, summary_df, p_df, p_pos_df, covariates_df,
                                                   group_s=group_s, fdr=args.fdr, nperm=args.permutations, window=args.window,
                                                   maf_threshold=maf_threshold, logger=logger, seed=args.seed, verbose=True))
             res_df = pd.concat(res_df).reset_index(drop=True)
@@ -287,7 +285,27 @@ def main():
             summary_df, res = susie.map_loci(locus_df, genotype_df, variant_df, phenotype_df, covariates_df,
                                              maf_threshold=maf_threshold, max_iter=500, window=args.window)
         else:
-            raise NotImplementedError()
+            # TODO: benchmark loading each window on the fly vs chunks; 
+            summary_df = []
+            res = {}
+            # replace ID with unique locus ID, copy phenotypes
+            num_loci = defaultdict(int)
+            locus_ix = []
+            for phenotype_id in locus_df['phenotype_id']:
+                num_loci[phenotype_id] += 1
+                locus_ix.append(num_loci[phenotype_id])
+            locus_df['locus'] = locus_ix
+            locus_df['locus_id'] = locus_df['phenotype_id'] + '_' + locus_df['locus'].astype(str)
+            phenotype_df = phenotype_df.loc[locus_df['phenotype_id']].copy()
+            phenotype_df.index = locus_df['locus_id']
+            pos_df = locus_df.set_index('locus_id')[['chr', 'pos']]  # TODO: sort?
+            for gt_df, var_df, p_df, p_pos_df, _ in genotypeio.generate_paired_chunks(pgr, phenotype_df, pos_df, args.chunk_size,
+                                                                                      dosages=args.dosages, verbose=True):
+                chunk_summary_df, chunk_res = susie.map_loci(p_pos_df.reset_index(), gt_df, var_df, p_df, covariates_df,
+                                                             maf_threshold=maf_threshold, max_iter=500, window=args.window)
+                summary_df.append(chunk_summary_df)
+                res |= chunk_res
+            summary_df = pd.concat(summary_df).reset_index(drop=True)
 
         summary_df.to_parquet(os.path.join(args.output_dir, f'{args.prefix}.SuSiE_summary.parquet'))
         with open(os.path.join(args.output_dir, f'{args.prefix}.SuSiE.pickle'), 'wb') as f:
@@ -295,8 +313,10 @@ def main():
 
     elif args.mode == 'trans':
         return_sparse = not args.return_dense
-        if return_sparse:
-            logger.write(f'  * p-value threshold: {args.pval_threshold:.2g}')
+        pval_threshold = args.pval_threshold
+        if pval_threshold is None and return_sparse:
+            pval_threshold = 1e-5
+            logger.write(f'  * p-value threshold: {pval_threshold:.2g}')
 
         if interaction_df is not None:
             if interaction_df.shape[1] > 1:
@@ -306,7 +326,7 @@ def main():
 
         if args.chunk_size is None:
             pairs_df = trans.map_trans(genotype_df, phenotype_df, covariates_df=covariates_df, interaction_s=interaction_df,
-                                       return_sparse=return_sparse, pval_threshold=args.pval_threshold,
+                                       return_sparse=return_sparse, pval_threshold=pval_threshold,
                                        maf_threshold=maf_threshold, batch_size=args.batch_size,
                                        return_r2=args.return_r2, logger=logger)
             if args.return_dense:
@@ -326,7 +346,7 @@ def main():
                 else:
                     gt_df = pgr.read_range(bounds[i], bounds[i+1]-1, impute_mean=False, dtype=np.int8)
                 pairs_df.append(trans.map_trans(gt_df, phenotype_df, covariates_df=covariates_df, interaction_s=interaction_df,
-                                                return_sparse=return_sparse, pval_threshold=args.pval_threshold,
+                                                return_sparse=return_sparse, pval_threshold=pval_threshold,
                                                 maf_threshold=maf_threshold, batch_size=args.batch_size,
                                                 return_r2=args.return_r2, logger=logger))
             pairs_df = pd.concat(pairs_df).reset_index(drop=True)
@@ -334,8 +354,9 @@ def main():
 
         if return_sparse:
             if variant_df is not None and phenotype_pos_df is not None:
-                logger.write('  * filtering out cis-QTLs (within +/-5Mb)')
-                pairs_df = trans.filter_cis(pairs_df, phenotype_pos_df, variant_df, window=5000000)
+                # Change - Drosophila cis-QTLs are within a smaller distance #
+                logger.write('  * filtering out Drosophila cis-QTLs (within +/-10kb)')
+                pairs_df = trans.filter_cis(pairs_df, phenotype_pos_df, variant_df, window=10000)
 
             logger.write('  * writing sparse output')
             if not args.output_text:
