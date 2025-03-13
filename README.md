@@ -1,4 +1,7 @@
-## tensorQTL
+## tensorQTL_modded
+
+###### NOTE: THIS IS A VERSION MODIFIED TO SPIT OUT ALL CIS-TESTS RATHER THAN JUST THOSE THAT ARE SIGNIFICANT AFTER THE DEFAULT FDR CONTROL PROCEDURE ###########################
+
 
 tensorQTL is a GPU-enabled QTL mapper, achieving ~200-300 fold faster *cis*- and *trans*-QTL mapping compared to CPU-based implementations.
 
